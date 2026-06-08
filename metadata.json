@@ -1,0 +1,6 @@
+{
+  "name": "FLEX",
+  "description": "A customized personal fitness tracking web app for posture enhancement, asymmetric rehabilitation, and comprehensive body metrics tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
