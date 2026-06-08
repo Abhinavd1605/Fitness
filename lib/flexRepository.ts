@@ -44,9 +44,16 @@ function validDateFromUnknown(date: string): boolean {
 }
 
 function getCurrentDateKey(offsetDays = 0): string {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
+  // Use India Standard Time (UTC+05:30) for server-side date boundaries
+  const now = new Date();
+  const utcMillis = now.getTime() + now.getTimezoneOffset() * 60000;
+  const istOffsetMillis = 5.5 * 60 * 60 * 1000; // +05:30
+  const targetMillis = utcMillis + istOffsetMillis + offsetDays * 86400000;
+  const d = new Date(targetMillis);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 async function ensureDefaultProfile() {
