@@ -1,0 +1,14 @@
+import { NextResponse } from "next/server";
+import { upsertBodyStat } from "@/lib/flexRepository";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request) {
+  try {
+    const payload = await request.json();
+    return NextResponse.json(await upsertBodyStat(payload));
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json({ error: "Failed to save measurements" }, { status: 400 });
+  }
+}

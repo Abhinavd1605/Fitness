@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Profile {
+  id                     String              @id @default("default")
+  visceralFatLevel       Int                 @default(23)
+  localStorageImportedAt DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  bodyStats              BodyStat[]
+  workoutCompletions     WorkoutCompletion[]
+  nutritionLogs          NutritionLog[]
+  stepLogs               StepLog[]
+}
+
+model WorkoutDay {
+  id        String     @id @default(cuid())
+  dayNum    Int        @unique
+  name      String
+  color     String
+  icon      String
+  exercises Exercise[]
+}
+
+model Exercise {
+  id              String              @id
+  dayId           String
+  order           Int
+  name            String
+  sets            String
+  reps            String
+  muscle          String
+  equip           String
+  note            String
+  cues            String[]
+  yt              String
+  leftArmExercise Boolean             @default(false)
+  day             WorkoutDay          @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  completions     WorkoutCompletion[]
+}
+
+model BodyStat {
+  id        String   @id @default(cuid())
+  profileId String
+  date      String
+  weight    Float
+  bodyFat   Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, date])
+}
+
+model WorkoutCompletion {
+  id         String   @id @default(cuid())
+  profileId  String
+  date       String
+  exerciseId String
+  createdAt  DateTime @default(now())
+  profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, date, exerciseId])
+}
+
+model NutritionLog {
+  id        String   @id @default(cuid())
+  profileId String
+  date      String
+  source    String
+  grams     Int
+  time      DateTime
+  createdAt DateTime @default(now())
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, date])
+}
+
+model StepLog {
+  id        String   @id @default(cuid())
+  profileId String
+  date      String
+  steps     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, date])
+}

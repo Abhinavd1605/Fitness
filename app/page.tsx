@@ -34,23 +34,74 @@ import {
   ResponsiveContainer,
   CartesianGrid
 } from "recharts";
-import { WORKOUT_DAYS, Exercise, DayData, getMuscleGroupEmoji } from "@/lib/workoutData";
+import type { AppState, BodyStatEntry, LocalImportPayload, NutritionEntry } from "@/lib/appState";
+import { Exercise, DayData, getMuscleGroupEmoji } from "@/lib/workoutData";
 
-// Initial seeds
-const INITIAL_STATS = [
-  { date: "2026-06-05", weight: 104.8, bodyFat: 43.0 }
-];
+const EMPTY_REST_DAY: DayData = {
+  dayNum: 7,
+  name: "Rest Day",
+  color: "#475569",
+  icon: "😴",
+  exercises: [],
+};
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function readLocalJson(key: string) {
+  const value = localStorage.getItem(key);
+  if (!value) return undefined;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function collectLocalImportPayload(): LocalImportPayload | null {
+  const payload: LocalImportPayload = {
+    stats: readLocalJson("flex:stats"),
+    logs: readLocalJson("flex:logs"),
+    nutrition: readLocalJson("flex:nutrition"),
+    steps: readLocalJson("flex:steps"),
+  };
+
+  const savedVisceral = localStorage.getItem("flex:visceral");
+  if (savedVisceral) {
+    const level = Number(savedVisceral);
+    if (Number.isFinite(level)) payload.visceral = level;
+  }
+
+  return Object.values(payload).some((value) => value !== undefined) ? payload : null;
+}
 
 export default function FlexApp() {
   // Navigation & UI tabs
   const [activeTab, setActiveTab] = useState<"home" | "workout" | "library" | "stats" | "nutrition">("home");
   const [isMounted, setIsMounted] = useState(false);
   
-  // Storage states
-  const [bodyStats, setBodyStats] = useState<Array<{ date: string; weight: number; bodyFat: number }>>([]);
+  // DB-backed app states
+  const [workoutDays, setWorkoutDays] = useState<DayData[]>([]);
+  const [bodyStats, setBodyStats] = useState<BodyStatEntry[]>([]);
   const [workoutLogs, setWorkoutLogs] = useState<Record<string, Record<string, boolean>>>({});
-  const [nutritionLogs, setNutritionLogs] = useState<Record<string, Array<{ source: string; grams: number; time: string }>>>({});
+  const [nutritionLogs, setNutritionLogs] = useState<Record<string, NutritionEntry[]>>({});
   const [stepLogs, setStepLogs] = useState<Record<string, number>>({});
+  const [isSyncing, setIsSyncing] = useState(true);
+  const [syncError, setSyncError] = useState("");
   
   // Custom manual state for visceral fat (part of transformation goals)
   const [visceralFatLevel, setVisceralFatLevel] = useState(23);
@@ -73,6 +124,15 @@ export default function FlexApp() {
   // Timing helper
   const [currentDateStr, setCurrentDateStr] = useState("");
 
+  const applyAppState = (state: AppState) => {
+    setWorkoutDays(state.workoutDays);
+    setBodyStats(state.bodyStats);
+    setWorkoutLogs(state.workoutLogs);
+    setNutritionLogs(state.nutritionLogs);
+    setStepLogs(state.stepLogs);
+    setVisceralFatLevel(state.visceralFatLevel);
+  };
+
   // Setup client-side state on mount
   useEffect(() => {
     setIsMounted(true);
@@ -86,105 +146,34 @@ export default function FlexApp() {
     const todayStr = `${yStr}-${mStr}-${dStr}`;
     setCurrentDateStr(todayStr);
 
-    // 1. STATS
-    const savedStats = localStorage.getItem("flex:stats");
-    if (savedStats) {
-      try {
-        const parsed = JSON.parse(savedStats);
-        setBodyStats(parsed);
-      } catch (e) {
-        setBodyStats(INITIAL_STATS);
-      }
-    } else {
-      localStorage.setItem("flex:stats", JSON.stringify(INITIAL_STATS));
-      setBodyStats(INITIAL_STATS);
-    }
+    const loadState = async () => {
+      setIsSyncing(true);
+      setSyncError("");
 
-    // 2. WORKOUTS
-    const savedLogs = localStorage.getItem("flex:logs");
-    if (savedLogs) {
       try {
-        setWorkoutLogs(JSON.parse(savedLogs));
-      } catch (e) {}
-    }
+        const state = await apiJson<AppState>("/api/app-state");
+        applyAppState(state);
 
-    // 3. NUTRITION
-    const savedNutrition = localStorage.getItem("flex:nutrition");
-    if (savedNutrition) {
-      try {
-        setNutritionLogs(JSON.parse(savedNutrition));
-      } catch (e) {}
-    }
-
-    // 4. VISCERAL FAT
-    const savedVisceral = localStorage.getItem("flex:visceral");
-    if (savedVisceral) {
-      setVisceralFatLevel(Number(savedVisceral));
-    }
-
-    // 5. STEPS
-    const savedSteps = localStorage.getItem("flex:steps");
-    if (savedSteps) {
-      try {
-        setStepLogs(JSON.parse(savedSteps));
-      } catch (e) {}
-    } else {
-      // Seed some initial steps data for past days to show progress instantly
-      const initialSteps: Record<string, number> = {};
-      const today = new Date();
-      
-      // We want to construct past 7 days step counts
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(today.getDate() - i);
-        const yStr = d.getFullYear();
-        const mStr = String(d.getMonth() + 1).padStart(2, "0");
-        const dStr = String(d.getDate()).padStart(2, "0");
-        const dateKey = `${yStr}-${mStr}-${dStr}`;
-        if (i === 0) {
-          initialSteps[dateKey] = 6820; // today's progress so far
-        } else if (i === 1) {
-          initialSteps[dateKey] = 10450; // met goal
-        } else if (i === 2) {
-          initialSteps[dateKey] = 9200;
-        } else if (i === 3) {
-          initialSteps[dateKey] = 11100; // met goal
-        } else if (i === 4) {
-          initialSteps[dateKey] = 7800;
-        } else {
-          initialSteps[dateKey] = Math.floor(Math.random() * 4000) + 7000;
+        if (localStorage.getItem("flex:db-imported") !== "true") {
+          const importPayload = collectLocalImportPayload();
+          if (importPayload) {
+            const importedState = await apiJson<AppState>("/api/import-local", {
+              method: "POST",
+              body: JSON.stringify(importPayload),
+            });
+            applyAppState(importedState);
+          }
+          localStorage.setItem("flex:db-imported", "true");
         }
+      } catch {
+        setSyncError("Database sync failed. Check DATABASE_URL and migrations.");
+      } finally {
+        setIsSyncing(false);
       }
-      setStepLogs(initialSteps);
-      localStorage.setItem("flex:steps", JSON.stringify(initialSteps));
-    }
+    };
+
+    loadState();
   }, []);
-
-  // Sync state helpers
-  const saveStatsToStorage = (newStats: typeof bodyStats) => {
-    setBodyStats(newStats);
-    localStorage.setItem("flex:stats", JSON.stringify(newStats));
-  };
-
-  const saveStepsToStorage = (newSteps: Record<string, number>) => {
-    setStepLogs(newSteps);
-    localStorage.setItem("flex:steps", JSON.stringify(newSteps));
-  };
-
-  const saveWorkoutsToStorage = (newLogs: typeof workoutLogs) => {
-    setWorkoutLogs(newLogs);
-    localStorage.setItem("flex:logs", JSON.stringify(newLogs));
-  };
-
-  const saveNutritionToStorage = (newNutrition: typeof nutritionLogs) => {
-    setNutritionLogs(newNutrition);
-    localStorage.setItem("flex:nutrition", JSON.stringify(newNutrition));
-  };
-
-  const saveVisceralToStorage = (level: number) => {
-    setVisceralFatLevel(level);
-    localStorage.setItem("flex:visceral", String(level));
-  };
 
   // Date and Day calculation
   const getTodayDayNum = () => {
@@ -194,7 +183,7 @@ export default function FlexApp() {
   };
 
   const todayDayNum = getTodayDayNum();
-  const todayWorkoutDay: DayData = WORKOUT_DAYS.find(d => d.dayNum === todayDayNum) || WORKOUT_DAYS[6];
+  const todayWorkoutDay: DayData = workoutDays.find(d => d.dayNum === todayDayNum) || workoutDays[6] || EMPTY_REST_DAY;
 
   // Get current week dates (Mon to Sun)
   const getWeekDates = () => {
@@ -220,7 +209,8 @@ export default function FlexApp() {
 
   // Helper: check completion status of any date Str
   const getDateWorkoutStatus = (dateStr: string, dayIdx: number) => {
-    const dayData = WORKOUT_DAYS[dayIdx];
+    const dayData = workoutDays[dayIdx];
+    if (!dayData) return "not_started";
     if (dayData.dayNum === 7) return "rest"; // Sunday Rest
     
     const dayExercises = dayData.exercises;
@@ -329,7 +319,7 @@ export default function FlexApp() {
   const weightLostText = weightLostVal > 0 ? `${weightLostVal.toFixed(1)} kg` : "—";
 
   // Toggle single exercise on/off
-  const toggleExercise = (exerciseId: string) => {
+  const toggleExercise = async (exerciseId: string) => {
     const todayStr = currentDateStr || new Date().toISOString().split("T")[0];
     const updatedDateLogs = { ...(workoutLogs[todayStr] || {}) };
     const currentStatus = !!updatedDateLogs[exerciseId];
@@ -340,7 +330,18 @@ export default function FlexApp() {
       ...workoutLogs,
       [todayStr]: updatedDateLogs
     };
-    saveWorkoutsToStorage(newWorkoutLogs);
+    setWorkoutLogs(newWorkoutLogs);
+
+    try {
+      const state = await apiJson<AppState>("/api/workouts/toggle", {
+        method: "POST",
+        body: JSON.stringify({ date: todayStr, exerciseId }),
+      });
+      applyAppState(state);
+    } catch {
+      setWorkoutLogs(workoutLogs);
+      setSyncError("Could not save workout completion.");
+    }
   };
 
   // Get completed counts for today's workout
@@ -354,7 +355,7 @@ export default function FlexApp() {
   // Deduplicate exercises for Library view
   const getDeduplicatedLibrary = () => {
     const cache = new Map<string, Exercise>();
-    WORKOUT_DAYS.forEach(day => {
+    workoutDays.forEach(day => {
       day.exercises.forEach(ex => {
         if (!cache.has(ex.name)) {
           cache.set(ex.name, ex);
@@ -397,7 +398,7 @@ export default function FlexApp() {
   });
 
   // Log stats submission handler
-  const handleLogMeasurements = (e: React.FormEvent) => {
+  const handleLogMeasurements = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputWeight || !inputBodyFat) return;
     const weightNum = parseFloat(inputWeight);
@@ -416,13 +417,24 @@ export default function FlexApp() {
       statsCopy.push({ date: todayStr, weight: weightNum, bodyFat: fatNum });
     }
     
-    saveStatsToStorage(statsCopy.sort((a, b) => a.date.localeCompare(b.date)));
+    const nextStats = statsCopy.sort((a, b) => a.date.localeCompare(b.date));
+    setBodyStats(nextStats);
     setInputWeight("");
     setInputBodyFat("");
+
+    try {
+      const state = await apiJson<AppState>("/api/stats", {
+        method: "POST",
+        body: JSON.stringify({ date: todayStr, weight: weightNum, bodyFat: fatNum }),
+      });
+      applyAppState(state);
+    } catch {
+      setSyncError("Could not save measurements.");
+    }
   };
 
   // Nutrition quick add protein logs
-  const logProtein = (source: string, grams: number) => {
+  const logProtein = async (source: string, grams: number) => {
     const todayStr = currentDateStr || new Date().toISOString().split("T")[0];
     const todayLogs = [...(nutritionLogs[todayStr] || [])];
     
@@ -436,20 +448,43 @@ export default function FlexApp() {
       ...nutritionLogs,
       [todayStr]: todayLogs
     };
-    saveNutritionToStorage(newNutritionLogs);
+    setNutritionLogs(newNutritionLogs);
+
+    try {
+      const state = await apiJson<AppState>("/api/nutrition", {
+        method: "POST",
+        body: JSON.stringify({ date: todayStr, source, grams }),
+      });
+      applyAppState(state);
+    } catch {
+      setSyncError("Could not save protein log.");
+    }
   };
 
   // Delete individual protein entry
-  const deleteProteinLog = (index: number) => {
+  const deleteProteinLog = async (index: number) => {
     const todayStr = currentDateStr || new Date().toISOString().split("T")[0];
     const todayLogs = [...(nutritionLogs[todayStr] || [])];
+    const logToDelete = todayLogs[index];
     todayLogs.splice(index, 1);
 
     const newNutritionLogs = {
       ...nutritionLogs,
       [todayStr]: todayLogs
     };
-    saveNutritionToStorage(newNutritionLogs);
+    setNutritionLogs(newNutritionLogs);
+
+    if (!logToDelete?.id) return;
+
+    try {
+      const state = await apiJson<AppState>("/api/nutrition", {
+        method: "DELETE",
+        body: JSON.stringify({ id: logToDelete.id }),
+      });
+      applyAppState(state);
+    } catch {
+      setSyncError("Could not delete protein log.");
+    }
   };
 
   // Calculate today's protein logged
@@ -457,7 +492,7 @@ export default function FlexApp() {
   const todayTotalProtein = todayProteinList.reduce((acc, curr) => acc + curr.grams, 0);
 
   // Steps action handlers
-  const logSteps = (amount: number, isDirectSet = false) => {
+  const logSteps = async (amount: number, isDirectSet = false) => {
     const todayStr = currentDateStr || new Date().toISOString().split("T")[0];
     const currentSteps = stepLogs[todayStr] || 0;
     const newSteps = isDirectSet ? Math.max(0, amount) : Math.max(0, currentSteps + amount);
@@ -466,7 +501,31 @@ export default function FlexApp() {
       ...stepLogs,
       [todayStr]: newSteps
     };
-    saveStepsToStorage(updatedSteps);
+    setStepLogs(updatedSteps);
+
+    try {
+      const state = await apiJson<AppState>("/api/steps", {
+        method: "POST",
+        body: JSON.stringify({ date: todayStr, steps: newSteps }),
+      });
+      applyAppState(state);
+    } catch {
+      setSyncError("Could not save steps.");
+    }
+  };
+
+  const saveVisceralLevel = async (level: number) => {
+    setVisceralFatLevel(level);
+
+    try {
+      const state = await apiJson<AppState>("/api/visceral", {
+        method: "POST",
+        body: JSON.stringify({ level }),
+      });
+      applyAppState(state);
+    } catch {
+      setSyncError("Could not save visceral fat level.");
+    }
   };
 
   // Custom protein timing format helper
@@ -586,7 +645,16 @@ export default function FlexApp() {
             transition={{ duration: 0.3, ease: "easeOut" }}
             className="flex-1 overflow-y-auto px-4 py-6 md:px-8 md:py-8 h-full shadow-inner pb-24"
           >
-            
+            {(isSyncing || syncError) && (
+              <div className={`max-w-4xl mx-auto mb-4 rounded-lg border px-4 py-2 text-xs font-mono tracking-wider ${
+                syncError
+                  ? "border-red-500/30 bg-red-500/10 text-red-200"
+                  : "border-[#E2FF31]/20 bg-[#E2FF31]/10 text-[#E2FF31]"
+              }`}>
+                {syncError || "Syncing with database..."}
+              </div>
+            )}
+
             {/* TAB CONTENT: HOME */}
             {activeTab === "home" && (
               <div className="max-w-4xl mx-auto space-y-6">
@@ -881,7 +949,7 @@ export default function FlexApp() {
                       const dayName = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][idx];
                       const isToday = dStr === currentDateStr;
                       const status = getDateWorkoutStatus(dStr, idx);
-                      const dayColor = WORKOUT_DAYS[idx].color;
+                      const dayColor = workoutDays[idx]?.color || "#475569";
 
                       return (
                         <div key={dStr} className="flex flex-col items-center">
@@ -968,14 +1036,14 @@ export default function FlexApp() {
                               {/* manual adjust buttons */}
                               <div className="flex items-center gap-0.5 bg-white/5 rounded-lg border border-white/10 p-0.5 ml-2">
                                 <button 
-                                  onClick={() => saveVisceralToStorage(Math.max(10, visceralFatLevel - 1))}
+                                  onClick={() => saveVisceralLevel(Math.max(10, visceralFatLevel - 1))}
                                   className="w-4 h-4 text-[9px] bg-white/5 hover:bg-white/10 border border-white/5 rounded text-white cursor-pointer select-none active:scale-95 flex items-center justify-center font-bold"
                                   title="Decrease"
                                 >
                                   -
                                 </button>
                                 <button 
-                                  onClick={() => saveVisceralToStorage(Math.min(23, visceralFatLevel + 1))}
+                                  onClick={() => saveVisceralLevel(Math.min(23, visceralFatLevel + 1))}
                                   className="w-4 h-4 text-[9px] bg-white/5 hover:bg-white/10 border border-white/5 rounded text-white cursor-pointer select-none active:scale-95 flex items-center justify-center font-bold"
                                   title="Increase"
                                 >

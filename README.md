@@ -10,11 +10,18 @@ View your app in AI Studio: https://ai.studio/apps/b81e5612-2aa9-4d02-b489-e229e
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js and a Postgres database
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Set `DATABASE_URL` and `GEMINI_API_KEY` in [.env.local](.env.local)
+3. Create and seed the database:
+   `npm run db:migrate && npm run db:seed`
+4. Run the app:
    `npm run dev`
+
+## Deploy on Vercel
+
+Connect a Vercel Marketplace Postgres/Neon database to the project so `DATABASE_URL`
+is available in Production. After that, normal git pushes run Prisma migrations
+during the Vercel build and deploy the app.
